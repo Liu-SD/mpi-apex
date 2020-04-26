@@ -40,7 +40,6 @@ def worker(args, task_type, data, lock, buffer, comm, start_sending_batch_condit
 
     thread_count -= 1
 
-
 def replay(args, comm):
     logger = utils.get_logger('replay')
     logger.info(f'rank={comm.Get_rank()}, pid={os.getpid()}')
@@ -63,9 +62,7 @@ def replay(args, comm):
     start_sending_batch_condition = threading.Condition()
 
     while True:
-        _t_start = time.time()
         index, msg = Request.waitany(requests) # always return first meet request, so we should use a queue to make other request replied
-        _t_wait = time.time()
         thread_count += 1
         thread_pool_executor.submit(worker, args, index, msg, lock, buffer, comm, start_sending_batch_condition)
         if index == 0: # batch recv
@@ -74,12 +71,6 @@ def replay(args, comm):
             requests[index]=comm.irecv(source=utils.RANK_LEARNER, tag=utils.TAG_SEND_BATCH)
         elif index == 2: # prios recv
             requests[index] = comm.irecv(source=utils.RANK_LEARNER, tag=utils.TAG_RECV_PRIOS)
-        _t_busy = time.time()
-        _wait = _t_wait - _t_start
-        _busy = _t_busy - _t_wait
-        _percentage = _wait / (_busy + _wait)
-        request_type_string = ['RECV_BATCH', 'SEND_BATCH', 'RECV_PRIOS']
-        logger.info(f'wait time: {_wait:.5f}, busy time: {_busy:.5f}, persentage: {_percentage:.2f}, request: {request_type_string[index]}, current thread counts: {thread_count}')
 
         delta_t = time.time() - prev_t
         if delta_t > 60:

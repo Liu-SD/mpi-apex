@@ -24,9 +24,7 @@ def recv_batch(queue, comm, n_requests=3):
 
 def to_tensor(in_queue, out_queue, device):
     while True:
-        _t_start = time.time()
         msg = in_queue.get()
-        _t_req = time.time()
 
         states, actions, rewards, next_states, dones, _, _, weights, idxes = msg
         states = np.array([np.array(state) for state in states])
@@ -38,14 +36,8 @@ def to_tensor(in_queue, out_queue, device):
         dones = torch.FloatTensor(dones).to(device)
         weights = torch.FloatTensor(weights).to(device)
         batch = [states, actions, rewards, next_states, dones, weights, idxes]
-        _t_device = time.time()
 
         out_queue.put(batch)
-
-        _req = _t_req - _t_start
-        _device = _t_device - _t_req
-        _total = _t_device - _t_start
-        # logger.info(f'{_req/_total:.2f}, {_device/_total:.2f}')
 
 def send_prios(queue, comm, logger, n_requests=1):
     send_prios_requests = []
@@ -89,7 +81,6 @@ def learner(args, comm):
     while True:
         # test send_param_requests
         # there's bug in Request.testsome, so we should using for loop to test them.
-        _t_start = time.time()
         send_param_indexes = []
         for i, (rank, req) in enumerate(zip(send_param_ranks, send_param_requests)):
             ready, _ = req.test()
@@ -102,29 +93,11 @@ def learner(args, comm):
                 param[k] = v.cpu()
             for rank in send_param_indexes:
                 comm.send(param, dest=rank)
-        _t_param_send = time.time()
-
         (*batch, idxes) = tensor_queue.get()
-        _t_batch_recv = time.time()
-
         loss, prios, q_values = utils.compute_loss(model, tgt_model, batch, args.n_steps, args.gamma)
         grad_norm = utils.update_parameters(loss, model, optimizer, args.max_norm)
-        _t_train = time.time()
         prios_queue.put((idxes, prios))
-        _t_send_prios = time.time()
-
-        _recv_batch = _t_batch_recv - _t_param_send
-        _train = _t_train - _t_batch_recv
-        _send_prios = _t_send_prios - _t_train
-        _total = _t_send_prios - _t_start
-        logger.info(f'send param: {len(send_param_indexes)} {_t_param_send - _t_start:.4f} \
-recv batch: {_recv_batch:.4f} {int(_recv_batch/_total*100)}% \
-train: {_train:.4f} {int(_train/_total*100)}% \
-send prios: {_send_prios:.4f} {int(_send_prios/_total*100)}% \
-total: {_total:.4f}')
-
         learn_idx += 1
-
         tb_dict["loss"].append(float(loss))
         tb_dict["grad_norm"].append(float(grad_norm))
         tb_dict["max_q"].append(float(torch.max(q_values)))

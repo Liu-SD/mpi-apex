@@ -22,10 +22,9 @@ def evaluator(args, comm):
     env.seed(seed)
 
     model = DuelingDQN(env, args)
-    param_recv_buffer = bytearray(100*1024*1024)
 
     comm.send('', dest=utils.RANK_LEARNER)
-    param = comm.recv(buf=param_recv_buffer, source=utils.RANK_LEARNER)
+    param = comm.recv(source=utils.RANK_LEARNER)
     model.load_state_dict(param)
     logger.info("Received First Parameter!")
 
@@ -48,7 +47,7 @@ def evaluator(args, comm):
             episode_length = 0
             episode_idx += 1
             comm.send('', dest=utils.RANK_LEARNER)
-            param = comm.recv(buf=param_recv_buffer, source=utils.RANK_LEARNER)
+            param = comm.recv(source=utils.RANK_LEARNER)
             model.load_state_dict(param)
             logger.info(f"{datetime.now()} Updated Parameter..")
 
