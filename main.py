@@ -5,8 +5,7 @@ from actor import actor
 from eval import evaluator
 from replay import replay
 import utils
-
-import os
+import pickle
 
 def set_rank(n_actors):
     utils.RANK_ACTORS = [i for i in range(n_actors)]
@@ -15,7 +14,7 @@ def set_rank(n_actors):
     utils.RANK_EVALUATOR = n_actors+2
 
 if __name__ == '__main__':
-    os.environ['OMP_NUM_THREADS'] = "1"
+    torch.set_num_threads(1)
     args = argparser()
     set_rank(args.num_actors)
     comm = MPI.COMM_WORLD

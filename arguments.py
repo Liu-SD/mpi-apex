@@ -52,9 +52,9 @@ def argparser():
                         help='Size of prioritized replay buffer')
     parser.add_argument('--initial_exploration_samples', type=int, default=50000,
                         help='Initial random steps')
-    parser.add_argument('--threshold_size', type=int, default=1000,
+    parser.add_argument('--threshold_size', type=int, default=50000,
                         help='Threshold for starting to transfer batches to learner')
-    parser.add_argument('--batch_size', type=int, default=512,
+    parser.add_argument('--batch_size', type=int, default=64,
                         help='Size of samples prefetched batches will contain')
     parser.add_argument('--n_recv_batch_worker', type=int, default=1)
     parser.add_argument('--n_recv_prios_worker', type=int, default=1)

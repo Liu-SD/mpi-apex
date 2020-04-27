@@ -1,5 +1,7 @@
 # vscode
 .vscode/
+# tensorboard logs
+runs/
 # model
 *.pth
 # Byte-compiled / optimized / DLL files

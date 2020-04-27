@@ -7,6 +7,7 @@ from wrapper import make_atari, wrap_atari_dqn
 from model import DuelingDQN
 from mpi4py import MPI
 from datetime import datetime
+import pickle
 
 def evaluator(args, comm):
     logger = utils.get_logger('eval')
@@ -21,10 +22,13 @@ def evaluator(args, comm):
     utils.set_global_seeds(seed, use_torch=True)
     env.seed(seed)
 
+    torch.set_num_threads(1)
     model = DuelingDQN(env, args)
 
-    comm.send('', dest=utils.RANK_LEARNER)
-    param = comm.recv(source=utils.RANK_LEARNER)
+    recv_param_buf = bytearray(100*1024*1024)
+    comm.Send(b'', dest=utils.RANK_LEARNER)
+    comm.Recv(buf=recv_param_buf, source=utils.RANK_LEARNER)
+    param = pickle.loads(recv_param_buf)
     model.load_state_dict(param)
     logger.info("Received First Parameter!")
 
@@ -46,16 +50,17 @@ def evaluator(args, comm):
             episode_reward = 0
             episode_length = 0
             episode_idx += 1
-            comm.send('', dest=utils.RANK_LEARNER)
-            param = comm.recv(source=utils.RANK_LEARNER)
+            comm.Send(b'', dest=utils.RANK_LEARNER)
+            comm.Recv(buf=recv_param_buf, source=utils.RANK_LEARNER)
+            param = pickle.loads(recv_param_buf)
             model.load_state_dict(param)
             logger.info(f"{datetime.now()} Updated Parameter..")
 
             if (episode_idx * args.num_envs_per_worker) % args.tb_interval == 0:
-                writer.add_scalar('evaluator/episode_reward_mean', np.mean(tb_dict['episode_reward']), episode_idx)
-                writer.add_scalar('evaluator/episode_reward_max', np.max(tb_dict['episode_reward']), episode_idx)
-                writer.add_scalar('evaluator/episode_reward_min', np.min(tb_dict['episode_reward']), episode_idx)
-                writer.add_scalar('evaluator/episode_reward_std', np.std(tb_dict['episode_reward']), episode_idx)
-                writer.add_scalar('evaluator/episode_length_mean', np.mean(tb_dict['episode_length']), episode_idx)
+                writer.add_scalar('evaluator/1_episode_reward_mean', np.mean(tb_dict['episode_reward']), episode_idx)
+                writer.add_scalar('evaluator/2_episode_reward_max', np.max(tb_dict['episode_reward']), episode_idx)
+                writer.add_scalar('evaluator/3_episode_reward_min', np.min(tb_dict['episode_reward']), episode_idx)
+                writer.add_scalar('evaluator/4_episode_reward_std', np.std(tb_dict['episode_reward']), episode_idx)
+                writer.add_scalar('evaluator/5_episode_length_mean', np.mean(tb_dict['episode_length']), episode_idx)
                 tb_dict['episode_reward'].clear()
                 tb_dict['episode_length'].clear()

@@ -9,6 +9,7 @@ import utils
 from mpi4py import MPI
 from mpi4py.MPI import Request
 import os
+import pickle
 
 def actor(args, actor_id, comm):
     logger = utils.get_logger(f'actor{actor_id}')
@@ -26,7 +27,7 @@ def actor(args, actor_id, comm):
 
     model = DuelingDQN(envs[0], args)
     model = torch.jit.trace(model, torch.zeros((1,4,84,84)))
-    param_recv_buffer = bytearray(100*1024*1024)
+    recv_param_buf = bytearray(100*1024*1024)
     _actor_id = np.arange(num_envs) + actor_id * num_envs
     n_actors = args.num_actors * num_envs
     epsilons = args.eps_base ** (1 + _actor_id / (n_actors - 1) * args.eps_alpha)
@@ -43,7 +44,7 @@ def actor(args, actor_id, comm):
     states = np.array([env.reset() for env in envs])
     tb_dict = {key: [] for key in ['episode_reward', 'episode_length']}
     step_t = time.time()
-    ref_t = 0
+    inf_t = 0
     sim_t = 0
 
     episode_lengths_running_mean = np.array([1] * num_envs)
@@ -56,8 +57,8 @@ def actor(args, actor_id, comm):
 
     while True:
         if recv_param_request is not None:
-            ready, param = recv_param_request.test()
-            if ready:
+            if recv_param_request.Test():
+                param = pickle.loads(recv_param_buf)
                 model.load_state_dict(param)
                 recv_param_request = None
         if actor_idx * num_envs * n_actors <= args.initial_exploration_samples: # initial random exploration
@@ -68,7 +69,7 @@ def actor(args, actor_id, comm):
         with torch.no_grad():
             states_tensor = torch.tensor(states, dtype=torch.float32)
             q_values = model(states_tensor).detach().numpy()
-        ref_t += time.time() - _t
+        inf_t += time.time() - _t
         actions = np.argmax(q_values, 1)
         actions[random_idx] = np.random.choice(envs[0].action_space.n, len(random_idx))
 
@@ -91,25 +92,25 @@ def actor(args, actor_id, comm):
                 episode_rewards[i] = 0
                 episode_lengths[i] = 0
                 if tb_idx % args.tb_interval == 0:
-                    writer.add_scalar('actor/episode_reward_mean', np.mean(tb_dict['episode_reward']), tb_idx)
-                    writer.add_scalar('actor/episode_reward_max', np.max(tb_dict['episode_reward']), tb_idx)
-                    writer.add_scalar('actor/episode_reward_min', np.min(tb_dict['episode_reward']), tb_idx)
-                    writer.add_scalar('actor/episode_reward_std', np.std(tb_dict['episode_reward']), tb_idx)
-                    writer.add_scalar('actor/episode_length_mean', np.mean(tb_dict['episode_length']), tb_idx)
+                    writer.add_scalar('actor/1_episode_reward_mean', np.mean(tb_dict['episode_reward']), tb_idx)
+                    writer.add_scalar('actor/2_episode_reward_max', np.max(tb_dict['episode_reward']), tb_idx)
+                    writer.add_scalar('actor/3_episode_reward_min', np.min(tb_dict['episode_reward']), tb_idx)
+                    writer.add_scalar('actor/4_episode_reward_std', np.std(tb_dict['episode_reward']), tb_idx)
+                    writer.add_scalar('actor/5_episode_length_mean', np.mean(tb_dict['episode_length']), tb_idx)
                     tb_dict['episode_reward'].clear()
                     tb_dict['episode_length'].clear()
-                    writer.add_scalar('actor/step_time', (time.time() - step_t) / np.sum(episode_lengths), tb_idx)
-                    writer.add_scalar('actor/step_inference_time', ref_t / np.sum(episode_lengths), tb_idx)
-                    writer.add_scalar('actor/step_simulation_time', sim_t / np.sum(episode_lengths), tb_idx)
-                    ref_t = 0
+                    writer.add_scalar('actor/6_step_time', (time.time() - step_t) / np.sum(episode_lengths), tb_idx)
+                    writer.add_scalar('actor/7_step_inference_time', inf_t / np.sum(episode_lengths), tb_idx)
+                    writer.add_scalar('actor/8_step_simulation_time', sim_t / np.sum(episode_lengths), tb_idx)
+                    inf_t = 0
                     sim_t = 0
                     step_t = time.time()
 
         actor_idx += 1
 
         if actor_idx % args.update_interval == 0 and recv_param_request is None:
-            comm.isend('', dest=utils.RANK_LEARNER)
-            recv_param_request = comm.irecv(buf=param_recv_buffer, source=utils.RANK_LEARNER)
+            comm.Isend(b'', dest=utils.RANK_LEARNER)
+            recv_param_request = comm.Irecv(buf=recv_param_buf, source=utils.RANK_LEARNER)
 
         if sum(len(storage) for storage in storages) >= args.send_interval * num_envs:
             batch = []
@@ -121,8 +122,9 @@ def actor(args, actor_id, comm):
                 storage.reset()
             batch = [np.concatenate(v) for v in zip(*batch)]
             prios = np.concatenate(prios)
+            data = pickle.dumps((batch, prios))
             if len(send_batch_request_queue) == send_batch_request_maxsize:
                 index, _ = Request.waitany(send_batch_request_queue)
-                send_batch_request_queue[index] = comm.isend((batch, prios), dest=utils.RANK_REPLAY, tag=utils.TAG_RECV_BATCH)
+                send_batch_request_queue[index] = comm.Isend(data, dest=utils.RANK_REPLAY, tag=utils.TAG_RECV_BATCH)
             else:
-                send_batch_request_queue.append(comm.isend((batch, prios), dest=utils.RANK_REPLAY, tag=utils.TAG_RECV_BATCH))
+                send_batch_request_queue.append(comm.Isend(data, dest=utils.RANK_REPLAY, tag=utils.TAG_RECV_BATCH))
