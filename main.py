@@ -6,6 +6,7 @@ from eval import evaluator
 from replay import replay
 import utils
 import pickle
+import torch
 
 def set_rank(n_actors):
     utils.RANK_ACTORS = [i for i in range(n_actors)]
