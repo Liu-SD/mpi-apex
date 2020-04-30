@@ -11,10 +11,11 @@ import sys
 
 ##########################################
 # global constant for MPI communications #
+comm = None
 RANK_REPLAY = -1
 RANK_LEARNER = -1
 RANK_ACTORS = []
-RANK_EVALUATOR = []
+RANK_EVALUATOR = -1
 
 TAG_RECV_BATCH = 1
 TAG_SEND_BATCH = 2

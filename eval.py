@@ -9,7 +9,8 @@ from mpi4py import MPI
 from datetime import datetime
 import pickle
 
-def evaluator(args, comm):
+def evaluator(args):
+    comm = utils.comm
     logger = utils.get_logger('eval')
     writer = SummaryWriter(comment="-{}-eval".format(args.env))
 

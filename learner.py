@@ -13,7 +13,8 @@ import threading
 import pickle
 import sys
 
-def recv_batch(queue, comm, n_requests=3):
+def recv_batch(queue, n_requests=1):
+    comm = utils.comm
     recv_batch_buffer = [bytearray(50 * 1024 * 1024) for _ in range(n_requests)]
     for _ in range(n_requests):
         comm.Isend(b'', dest=utils.RANK_REPLAY, tag=utils.TAG_SEND_BATCH)
@@ -43,7 +44,8 @@ def to_tensor(in_queue, out_queue, device):
 
         out_queue.put(batch)
 
-def send_prios(queue, comm, logger, n_requests=1):
+def send_prios(queue, logger, n_requests=1):
+    comm = utils.comm
     send_prios_requests = []
     while True:
         prios = queue.get()
@@ -54,7 +56,26 @@ def send_prios(queue, comm, logger, n_requests=1):
             index = Request.Waitany(send_prios_requests)
             send_prios_requests[index] = comm.Isend(data, dest=utils.RANK_REPLAY, tag=utils.TAG_RECV_PRIOS)
 
-def learner(args, comm):
+def send_param(queue):
+    comm = utils.comm
+    send_param_ranks = utils.RANK_ACTORS + [utils.RANK_EVALUATOR]
+    bufs = [bytearray(1) for _ in send_param_ranks]
+    send_param_requests = [comm.Irecv(buf=bufs[i], source=rank) for i, rank in enumerate(send_param_ranks)]
+    while True:
+        param = queue.get()
+        current_send_param_idxes = [i for i, req in enumerate(send_param_requests) if req.Test()]
+        if len(current_send_param_idxes) == 0:
+            continue
+        for k, v in param.items():
+            param[k] = v.cpu()
+        data = pickle.dumps(param)
+        for i in current_send_param_idxes:
+            comm.Isend(data, dest=send_param_ranks[i])
+            send_param_requests[i] = comm.Irecv(buf=bufs[i], source=send_param_ranks[i])
+
+
+def learner(args):
+    comm = utils.comm
     logger = utils.get_logger('learner')
     logger.info(f'rank={comm.Get_rank()}, pid={os.getpid()}')
     env = wrap_atari_dqn(make_atari(args.env), args)
@@ -70,35 +91,19 @@ def learner(args, comm):
     optimizer = torch.optim.Adam(model.parameters(), args.lr)
     # optimizer = torch.optim.RMSprop(model.parameters(), args.lr, alpha=0.95, eps=1.5e-7, centered=True)
 
-    batch_queue = queue.Queue(maxsize=4)
+    batch_queue = queue.Queue(maxsize=3)
     tensor_queue = queue.Queue(maxsize=4)
     prios_queue = queue.Queue(maxsize=4)
-    threading.Thread(target=recv_batch, args=(batch_queue, comm)).start()
+    param_queue = queue.Queue(maxsize=3)
+    threading.Thread(target=recv_batch, args=(batch_queue,)).start()
     threading.Thread(target=to_tensor, args=(batch_queue, tensor_queue, device)).start()
-    threading.Thread(target=send_prios, args=(prios_queue, comm, logger)).start()
-
-    send_param_ranks = utils.RANK_ACTORS + [utils.RANK_EVALUATOR]
-    send_param_requests = [comm.irecv(source=rank) for rank in send_param_ranks]
+    threading.Thread(target=send_prios, args=(prios_queue, logger)).start()
+    threading.Thread(target=send_param, args=(param_queue,)).start()
 
     learn_idx = 0
     ts = time.time()
     tb_dict = {k: [] for k in ['loss', 'grad_norm', 'max_q', 'mean_q', 'min_q', 'batch_queue_size', 'tensor_queue_size', 'prios_queue_size']}
     while True:
-        # test send_param_requests
-        # there's bug in Request.testsome, so we should using for loop to test them.
-        send_param_indexes = []
-        for i, (rank, req) in enumerate(zip(send_param_ranks, send_param_requests)):
-            ready, _ = req.test()
-            if ready:
-                send_param_indexes.append(rank)
-                send_param_requests[i] = comm.irecv(source=rank)
-        if send_param_indexes:
-            param = model.state_dict()
-            for k, v in param.items():
-                param[k] = v.cpu()
-            data = pickle.dumps(param)
-            for rank in send_param_indexes:
-                comm.Send(data, dest=rank)
         (*batch, idxes) = tensor_queue.get()
         loss, prios, q_values = utils.compute_loss(model, tgt_model, batch, args.n_steps, args.gamma)
         grad_norm = utils.update_parameters(loss, model, optimizer, args.max_norm)
@@ -122,6 +127,8 @@ def learner(args, comm):
             tgt_model.load_state_dict(model.state_dict())
         if learn_idx % args.save_interval == 0:
             torch.save(model.state_dict(), "model.pth")
+        if learn_idx % args.publish_param_interval == 0:
+            param_queue.put(model.state_dict())
         if learn_idx % args.tb_interval == 0:
             bps = args.tb_interval / (time.time() - ts)
             for i, (k, v) in enumerate(tb_dict.items()):

@@ -8,11 +8,13 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 import threading
 import pickle
+import sys
 
 push_size = 0
 sample_size = 0
 
-def worker(args, task_type, buf, lock, buffer, comm, start_sending_batch_condition):
+def worker(args, task_type, buf, lock, buffer, start_sending_batch_condition):
+    comm = utils.comm
     global push_size, sample_size
     if task_type == 0: # batch recv
         batch, prios = pickle.loads(buf)
@@ -39,7 +41,8 @@ def worker(args, task_type, buf, lock, buffer, comm, start_sending_batch_conditi
             buffer.update_priorities(idxes, prios)
 
 
-def replay(args, comm):
+def replay(args):
+    comm = utils.comm
     logger = utils.get_logger('replay')
     logger.info(f'rank={comm.Get_rank()}, pid={os.getpid()}')
     prev_t = time.time()
@@ -65,7 +68,7 @@ def replay(args, comm):
 
     while True:
         index = Request.Waitany(requests) # always return first meet request, so we should use a queue to make other request replied
-        thread_pool_executor.submit(worker, args, index, bufs[index], lock, buffer, comm, start_sending_batch_condition)
+        thread_pool_executor.submit(worker, args, index, bufs[index], lock, buffer, start_sending_batch_condition)
         if index == 0: # batch recv
             requests[0]=comm.Irecv(buf=bufs[0], source=MPI.ANY_SOURCE, tag=utils.TAG_RECV_BATCH)
         elif index == 1: # batch send

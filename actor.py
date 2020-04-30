@@ -10,8 +10,12 @@ from mpi4py import MPI
 from mpi4py.MPI import Request
 import os
 import pickle
+import queue
+import threading
+import sys
 
-def actor(args, actor_id, comm):
+def actor(args, actor_id):
+    comm = utils.comm
     logger = utils.get_logger(f'actor{actor_id}')
     logger.info(f'actor: rank={comm.Get_rank()}, actor_id={actor_id}, pid={os.getpid()}')
     writer = SummaryWriter(comment="-{}-actor{}".format(args.env, actor_id))
@@ -27,13 +31,14 @@ def actor(args, actor_id, comm):
 
     model = DuelingDQN(envs[0], args)
     model = torch.jit.trace(model, torch.zeros((1,4,84,84)))
-    recv_param_buf = bytearray(100*1024*1024)
     _actor_id = np.arange(num_envs) + actor_id * num_envs
     n_actors = args.num_actors * num_envs
     epsilons = args.eps_base ** (1 + _actor_id / (n_actors - 1) * args.eps_alpha)
     storages = [BatchStorage(args.n_steps, args.gamma) for _ in range(num_envs)]
 
+    recv_param_buf = bytearray(100*1024*1024)
     recv_param_request = None
+
     send_batch_request_queue = []
     send_batch_request_maxsize = args.max_outstanding
 
@@ -56,11 +61,10 @@ def actor(args, actor_id, comm):
         return epsilons * scale
 
     while True:
-        if recv_param_request is not None:
-            if recv_param_request.Test():
-                param = pickle.loads(recv_param_buf)
-                model.load_state_dict(param)
-                recv_param_request = None
+        if recv_param_request and recv_param_request.Test():
+            param = pickle.loads(recv_param_buf)
+            model.load_state_dict(param)
+            recv_param_request = None
         if actor_idx * num_envs * n_actors <= args.initial_exploration_samples: # initial random exploration
             random_idx = np.arange(num_envs)
         else:
@@ -108,9 +112,12 @@ def actor(args, actor_id, comm):
 
         actor_idx += 1
 
-        if actor_idx % args.update_interval == 0 and recv_param_request is None:
-            comm.Isend(b'', dest=utils.RANK_LEARNER)
-            recv_param_request = comm.Irecv(buf=recv_param_buf, source=utils.RANK_LEARNER)
+        if actor_idx % args.update_interval == 0:
+            if recv_param_request is not None:
+                logger.info(f'actor {actor_id}: last recv param request is not complete!')
+            else:
+                comm.Send(b'', dest=utils.RANK_LEARNER)
+                recv_param_request = comm.Irecv(buf=recv_param_buf, source=utils.RANK_LEARNER)
 
         if sum(len(storage) for storage in storages) >= args.send_interval * num_envs:
             batch = []
