@@ -15,16 +15,12 @@ import sys
 
 def recv_batch(queue, n_requests=1):
     comm = utils.comm
-    recv_batch_buffer = [bytearray(50 * 1024 * 1024) for _ in range(n_requests)]
-    for _ in range(n_requests):
-        comm.Isend(b'', dest=utils.RANK_REPLAY, tag=utils.TAG_SEND_BATCH)
-    recv_batch_requests = [comm.Irecv(buf=recv_batch_buffer[i], source=utils.RANK_REPLAY) for i in range(n_requests)]
+    comm.Send(b'', dest=utils.RANK_REPLAY, tag=utils.TAG_SEND_BATCH)
+    recv_batch_buffer = bytearray(50*1024*1024)
     while True:
-        index = Request.Waitany(recv_batch_requests)
-        comm.Isend(b'', dest=utils.RANK_REPLAY, tag=utils.TAG_SEND_BATCH)
-        recv_batch_requests[index] = comm.Irecv(buf=recv_batch_buffer[index], source=utils.RANK_REPLAY)
-        msg = pickle.loads(recv_batch_buffer[index])
-        queue.put(msg)
+        comm.Recv(buf=recv_batch_buffer, source=utils.RANK_REPLAY)
+        batch = pickle.loads(recv_batch_buffer)
+        queue.put(batch)
 
 def to_tensor(in_queue, out_queue, device):
     torch.set_num_threads(1)
@@ -44,7 +40,7 @@ def to_tensor(in_queue, out_queue, device):
 
         out_queue.put(batch)
 
-def send_prios(queue, logger, n_requests=1):
+def send_prios(queue, n_requests=1):
     comm = utils.comm
     send_prios_requests = []
     while True:
@@ -70,7 +66,7 @@ def send_param(queue):
             param[k] = v.cpu()
         data = pickle.dumps(param)
         for i in current_send_param_idxes:
-            comm.Isend(data, dest=send_param_ranks[i])
+            comm.Send(data, dest=send_param_ranks[i])
             send_param_requests[i] = comm.Irecv(buf=bufs[i], source=send_param_ranks[i])
 
 
@@ -83,6 +79,7 @@ def learner(args):
 
     device = args.device
     model = DuelingDQN(env, args).to(device)
+    model.load_state_dict(torch.load('model.pth'))
     tgt_model = DuelingDQN(env, args).to(device)
     tgt_model.load_state_dict(model.state_dict())
     del env
@@ -97,7 +94,7 @@ def learner(args):
     param_queue = queue.Queue(maxsize=3)
     threading.Thread(target=recv_batch, args=(batch_queue,)).start()
     threading.Thread(target=to_tensor, args=(batch_queue, tensor_queue, device)).start()
-    threading.Thread(target=send_prios, args=(prios_queue, logger)).start()
+    threading.Thread(target=send_prios, args=(prios_queue,)).start()
     threading.Thread(target=send_param, args=(param_queue,)).start()
 
     learn_idx = 0

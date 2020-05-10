@@ -405,20 +405,19 @@ class BatchStorage:
         self.n_steps = n_steps
         self.gamma = gamma
 
-    def add(self, state, reward, action, done, q_values, timestamp, episode_idx):
-        if len(self.state_deque) == self.n_steps or done:
+    def add(self, state, reward, action, done, real_done, q_values, timestamp, episode_idx):
+        if len(self.state_deque) == self.n_steps and (real_done or not done):
             t0_state = self.state_deque[0]
             t0_reward = self.multi_step_reward(*self.reward_deque, reward)
             t0_action = self.action_deque[0]
             t0_q_values = self.q_values_deque[0]
             tp_n_state = state
             tp_n_q_values = q_values
-            done = np.float32(done)
             self.states.append(t0_state)
             self.actions.append(t0_action)
             self.rewards.append(t0_reward)
             self.next_states.append(tp_n_state)
-            self.dones.append(done)
+            self.dones.append(np.float32(real_done))
             self.q_values.append(t0_q_values)
             self.next_q_values.append(tp_n_q_values)
             self.timestamps.append(timestamp)

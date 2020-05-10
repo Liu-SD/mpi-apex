@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 import threading
 import pickle
 import sys
+import numpy as np
 
 push_size = 0
 sample_size = 0
@@ -30,11 +31,12 @@ def worker(args, task_type, buf, lock, buffer, start_sending_batch_condition):
             with start_sending_batch_condition:
                 start_sending_batch_condition.wait()
         assert len(buffer) >= args.threshold_size
-        with lock:
-            batch = buffer.sample(args.batch_size, args.beta)
-        data = pickle.dumps(batch)
-        comm.Send(data, dest=utils.RANK_LEARNER)
-        sample_size += args.batch_size
+        while True:
+            with lock:
+                batch = buffer.sample(args.batch_size, args.beta)
+            data = pickle.dumps(batch)
+            comm.Send(data, dest=utils.RANK_LEARNER)
+            sample_size += args.batch_size
     elif task_type == 2: # prios recv
         idxes, prios = pickle.loads(buf)
         with lock:
@@ -63,8 +65,9 @@ def replay(args):
         ]
 
     lock = threading.Lock()
-    thread_pool_executor = ThreadPoolExecutor()
+    thread_pool_executor = ThreadPoolExecutor(max_workers=10)
     start_sending_batch_condition = threading.Condition()
+    pending_count_record = []
 
     while True:
         index = Request.Waitany(requests) # always return first meet request, so we should use a queue to make other request replied
@@ -75,6 +78,7 @@ def replay(args):
             requests[1]=comm.Irecv(buf=bufs[1], source=utils.RANK_LEARNER, tag=utils.TAG_SEND_BATCH)
         elif index == 2: # prios recv
             requests[2] = comm.Irecv(buf=bufs[2], source=utils.RANK_LEARNER, tag=utils.TAG_RECV_PRIOS)
+        pending_count_record.append(thread_pool_executor._work_queue.qsize())
 
         delta_t = time.time() - prev_t
         if delta_t > 60:
@@ -82,8 +86,8 @@ def replay(args):
             writer.add_scalar('replay/1_push_per_second', push_size / delta_t, tb_step)
             writer.add_scalar('replay/2_sample_per_second', sample_size / delta_t, tb_step)
             writer.add_scalar('replay/3_buffer_size',len(buffer), tb_step)
-            writer.add_scalar('replay/4_thread_count', len(thread_pool_executor._threads), tb_step)
-            writer.add_scalar('replay/5_pending_count', thread_pool_executor._work_queue.qsize(), tb_step)
+            writer.add_scalar('replay/4_pending_count', np.mean(pending_count_record), tb_step)
             sample_size = 0
             push_size = 0
             prev_t = time.time()
+            pending_count_record.clear()

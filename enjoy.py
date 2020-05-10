@@ -65,4 +65,5 @@ def main():
 
 
 if __name__ == '__main__':
+    torch.set_num_threads(1)
     main()

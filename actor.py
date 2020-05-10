@@ -80,13 +80,15 @@ def actor(args, actor_id):
         for i, (state, q_value, action, env, storage) in enumerate(zip(states, q_values, actions, envs, storages)):
             _t = time.time()
             next_state, reward, done, _ = env.step(action)
+            real_done = env.was_real_done
             sim_t += time.time() - _t
-            storage.add(np.array(state), reward, action, done, q_value, _t, episode_lengths[i])
+            storage.add(np.array(state), reward, action, done, real_done, q_value, _t, episode_lengths[i])
             states[i] = next_state
             episode_rewards[i] += reward
             episode_lengths[i] += 1
             if done or episode_lengths[i] == args.max_episode_length:
                 states[i] = env.reset()
+            if real_done or episode_lengths[i] == args.max_episode_length:
                 episode_lengths_running_mean[i] = \
                     episode_lengths_running_mean[i] * running_mean_alpha + episode_lengths[i] * (1 - running_mean_alpha)
 
