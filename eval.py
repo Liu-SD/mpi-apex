@@ -3,6 +3,7 @@ from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 
 import utils
+from utils import global_dict
 from wrapper import make_atari, wrap_atari_dqn
 from model import DuelingDQN
 from mpi4py import MPI
@@ -10,9 +11,8 @@ from datetime import datetime
 import pickle
 
 def evaluator(args):
-    comm = utils.comm
-    logger = utils.get_logger('eval')
-    writer = SummaryWriter(comment="-{}-eval".format(args.env))
+    comm = global_dict['comm_local']
+    writer = SummaryWriter(comment="-{}-{}-eval".format(args.env, global_dict['unit_idx']))
 
     args.clip_rewards = False
     args.episode_life = False
@@ -27,11 +27,10 @@ def evaluator(args):
     model = DuelingDQN(env, args)
 
     recv_param_buf = bytearray(100*1024*1024)
-    comm.Send(b'', dest=utils.RANK_LEARNER)
-    comm.Recv(buf=recv_param_buf, source=utils.RANK_LEARNER)
+    comm.Send(b'', dest=global_dict['rank_learner'])
+    comm.Recv(buf=recv_param_buf, source=global_dict['rank_learner'])
     param = pickle.loads(recv_param_buf)
     model.load_state_dict(param)
-    logger.info("Received First Parameter!")
 
     episode_reward, episode_length, episode_idx = 0, 0, 0
     state = env.reset()
@@ -51,11 +50,10 @@ def evaluator(args):
             episode_reward = 0
             episode_length = 0
             episode_idx += 1
-            comm.Send(b'', dest=utils.RANK_LEARNER)
-            comm.Recv(buf=recv_param_buf, source=utils.RANK_LEARNER)
+            comm.Send(b'', dest=global_dict['rank_learner'])
+            comm.Recv(buf=recv_param_buf, source=global_dict['rank_learner'])
             param = pickle.loads(recv_param_buf)
             model.load_state_dict(param)
-            logger.info(f"{datetime.now()} Updated Parameter..")
 
             if (episode_idx * args.num_envs_per_worker) % args.tb_interval == 0:
                 writer.add_scalar('evaluator/1_episode_reward_mean', np.mean(tb_dict['episode_reward']), episode_idx)

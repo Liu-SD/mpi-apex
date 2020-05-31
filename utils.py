@@ -11,11 +11,7 @@ import sys
 
 ##########################################
 # global constant for MPI communications #
-comm = None
-RANK_REPLAY = -1
-RANK_LEARNER = -1
-RANK_ACTORS = []
-RANK_EVALUATOR = -1
+global_dict = dict()
 
 TAG_RECV_BATCH = 1
 TAG_SEND_BATCH = 2
@@ -93,17 +89,3 @@ def update_parameters(loss, model, optimizer, max_norm):
     optimizer.step()
     return total_norm
 
-def get_logger(name):
-    try:
-        os.mkdir('logs')
-    except:
-        pass
-    # logging.basicConfig(filename=f'logs/{name}.log', filemode='w')
-    # logger = logging.Logger(name)
-    class Logger:
-        def __init__(self, name):
-            self.fname = f'logs/{name}.log'
-        def info(self, string):
-            with open(self.fname, 'a') as f:
-                f.write(f'{datetime.now()}: {string}\n')
-    return Logger(name)

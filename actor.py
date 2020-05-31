@@ -6,6 +6,7 @@ from model import DuelingDQN
 from memory import BatchStorage
 from wrapper import make_atari, wrap_atari_dqn
 import utils
+from utils import global_dict
 from mpi4py import MPI
 from mpi4py.MPI import Request
 import os
@@ -15,10 +16,8 @@ import threading
 import sys
 
 def actor(args, actor_id):
-    comm = utils.comm
-    logger = utils.get_logger(f'actor{actor_id}')
-    logger.info(f'actor: rank={comm.Get_rank()}, actor_id={actor_id}, pid={os.getpid()}')
-    writer = SummaryWriter(comment="-{}-actor{}".format(args.env, actor_id))
+    comm = global_dict['comm_local']
+    writer = SummaryWriter(comment="-{}-{}-actor{}".format(args.env, global_dict['unit_idx'], actor_id))
 
     num_envs = args.num_envs_per_worker
     envs = [wrap_atari_dqn(make_atari(args.env), args) for _ in range(num_envs)]
@@ -31,8 +30,8 @@ def actor(args, actor_id):
 
     model = DuelingDQN(envs[0], args)
     model = torch.jit.trace(model, torch.zeros((1,4,84,84)))
-    _actor_id = np.arange(num_envs) + actor_id * num_envs
-    n_actors = args.num_actors * num_envs
+    _actor_id = (np.arange(num_envs) + actor_id * num_envs) * args.num_units + global_dict['unit_idx']
+    n_actors = args.num_actors * num_envs * args.num_units
     epsilons = args.eps_base ** (1 + _actor_id / (n_actors - 1) * args.eps_alpha)
     storages = [BatchStorage(args.n_steps, args.gamma) for _ in range(num_envs)]
 
@@ -116,10 +115,11 @@ def actor(args, actor_id):
 
         if actor_idx % args.update_interval == 0:
             if recv_param_request is not None:
-                logger.info(f'actor {actor_id}: last recv param request is not complete!')
+                print(f"actor {global_dict['unit_idx']}-{actor_id}: last recv param request is not complete!")
+                sys.stdout.flush()
             else:
-                comm.Send(b'', dest=utils.RANK_LEARNER)
-                recv_param_request = comm.Irecv(buf=recv_param_buf, source=utils.RANK_LEARNER)
+                comm.Send(b'', dest=global_dict['rank_learner'])
+                recv_param_request = comm.Irecv(buf=recv_param_buf, source=global_dict['rank_learner'])
 
         if sum(len(storage) for storage in storages) >= args.send_interval * num_envs:
             batch = []
@@ -134,6 +134,6 @@ def actor(args, actor_id):
             data = pickle.dumps((batch, prios))
             if len(send_batch_request_queue) == send_batch_request_maxsize:
                 index, _ = Request.waitany(send_batch_request_queue)
-                send_batch_request_queue[index] = comm.Isend(data, dest=utils.RANK_REPLAY, tag=utils.TAG_RECV_BATCH)
+                send_batch_request_queue[index] = comm.Isend(data, dest=global_dict['rank_replay'], tag=utils.TAG_RECV_BATCH)
             else:
-                send_batch_request_queue.append(comm.Isend(data, dest=utils.RANK_REPLAY, tag=utils.TAG_RECV_BATCH))
+                send_batch_request_queue.append(comm.Isend(data, dest=global_dict['rank_replay'], tag=utils.TAG_RECV_BATCH))

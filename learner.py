@@ -5,6 +5,7 @@ import torch
 import time
 import numpy as np
 import utils
+from utils import global_dict
 from wrapper import make_atari, wrap_atari_dqn
 from model import DuelingDQN
 import os
@@ -13,13 +14,16 @@ import threading
 import pickle
 import sys
 
-def recv_batch(queue, n_requests=1):
-    comm = utils.comm
-    comm.Send(b'', dest=utils.RANK_REPLAY, tag=utils.TAG_SEND_BATCH)
+prios_sum = 1.0
+
+def recv_batch(queue):
+    comm = global_dict['comm_local']
+    comm.Send(b'', dest=global_dict['rank_replay'], tag=utils.TAG_SEND_BATCH)
     recv_batch_buffer = bytearray(50*1024*1024)
+    global prios_sum
     while True:
-        comm.Recv(buf=recv_batch_buffer, source=utils.RANK_REPLAY)
-        batch = pickle.loads(recv_batch_buffer)
+        comm.Recv(buf=recv_batch_buffer, source=global_dict['rank_replay'])
+        batch, prios_sum = pickle.loads(recv_batch_buffer)
         queue.put(batch)
 
 def to_tensor(in_queue, out_queue, device):
@@ -41,20 +45,20 @@ def to_tensor(in_queue, out_queue, device):
         out_queue.put(batch)
 
 def send_prios(queue, n_requests=1):
-    comm = utils.comm
+    comm = global_dict['comm_local']
     send_prios_requests = []
     while True:
         prios = queue.get()
         data = pickle.dumps(prios)
         if len(send_prios_requests) < n_requests:
-            send_prios_requests.append(comm.Isend(data, dest=utils.RANK_REPLAY, tag=utils.TAG_RECV_PRIOS))
+            send_prios_requests.append(comm.Isend(data, dest=global_dict['rank_replay'], tag=utils.TAG_RECV_PRIOS))
         else:
             index = Request.Waitany(send_prios_requests)
-            send_prios_requests[index] = comm.Isend(data, dest=utils.RANK_REPLAY, tag=utils.TAG_RECV_PRIOS)
+            send_prios_requests[index] = comm.Isend(data, dest=global_dict['rank_replay'], tag=utils.TAG_RECV_PRIOS)
 
 def send_param(queue):
-    comm = utils.comm
-    send_param_ranks = utils.RANK_ACTORS + [utils.RANK_EVALUATOR]
+    comm = global_dict['comm_local']
+    send_param_ranks = global_dict['rank_actors'] + [global_dict['rank_evaluator']]
     bufs = [bytearray(1) for _ in send_param_ranks]
     send_param_requests = [comm.Irecv(buf=bufs[i], source=rank) for i, rank in enumerate(send_param_ranks)]
     while True:
@@ -69,22 +73,25 @@ def send_param(queue):
             comm.Send(data, dest=send_param_ranks[i])
             send_param_requests[i] = comm.Irecv(buf=bufs[i], source=send_param_ranks[i])
 
-
 def learner(args):
-    comm = utils.comm
-    logger = utils.get_logger('learner')
-    logger.info(f'rank={comm.Get_rank()}, pid={os.getpid()}')
+    comm = global_dict['comm_local']
+    comm_cross = global_dict['comm_cross']
+    size_cross = comm_cross.Get_size()
     env = wrap_atari_dqn(make_atari(args.env), args)
-    utils.set_global_seeds(args.seed, use_torch=True)
+    # utils.set_global_seeds(args.seed, use_torch=True)
 
     device = args.device
     model = DuelingDQN(env, args).to(device)
-    model.load_state_dict(torch.load('model.pth'))
+    if os.path.exists('model.pth'):
+        # model.load_state_dict(torch.load('model.pth'))
+        pass
+
     tgt_model = DuelingDQN(env, args).to(device)
     tgt_model.load_state_dict(model.state_dict())
     del env
 
-    writer = SummaryWriter(comment="-{}-learner".format(args.env))
+    writer = SummaryWriter(comment="-{}-{}-learner".format(args.env, global_dict['unit_idx']))
+    # optimizer = torch.optim.SGD(model.parameters(), 3e-2)
     optimizer = torch.optim.Adam(model.parameters(), args.lr)
     # optimizer = torch.optim.RMSprop(model.parameters(), args.lr, alpha=0.95, eps=1.5e-7, centered=True)
 
@@ -103,7 +110,33 @@ def learner(args):
     while True:
         (*batch, idxes) = tensor_queue.get()
         loss, prios, q_values = utils.compute_loss(model, tgt_model, batch, args.n_steps, args.gamma)
-        grad_norm = utils.update_parameters(loss, model, optimizer, args.max_norm)
+
+        optimizer.zero_grad()
+        loss.backward()
+        global_prios_sum = np.array(prios_sum)
+        comm_cross.Allreduce(MPI.IN_PLACE, global_prios_sum.data)
+        global_prios_sum = float(global_prios_sum)
+        scale = prios_sum / global_prios_sum
+        grad_norm = 0.
+        for p in model.parameters():
+            param_norm = p.grad.data.norm(2)
+            grad_norm += param_norm ** (1. / 2)
+
+            if learn_idx == 1e4:
+                state_dict = model.state_dict()
+                for k, v in state_dict.items():
+                    v = v.cpu().numpy()
+                    comm_cross.Bcast(v.data, root=0)
+                    state_dict[k] = torch.Tensor(v).to(device)
+                model.load_state_dict(state_dict)
+            grad = p.grad.cpu().numpy() * scale
+            comm_cross.Allreduce(MPI.IN_PLACE, grad.data)
+            grad = torch.Tensor(grad).to(device)
+            if learn_idx >= 1e4:
+                p.grad = grad
+        grad_norm = grad_norm  ** (1. / 2)
+        optimizer.step()
+
         prios_queue.put((idxes, prios))
         learn_idx += 1
         tb_dict["loss"].append(float(loss))

@@ -10,6 +10,7 @@ from arguments import argparser
 import cv2
 import os
 
+gradient = False
 
 def main():
     args = argparser()
@@ -38,15 +39,18 @@ def main():
         value, action = model(state).max(1)
         value = value[0]
         action = action[0]
-        value.backward()
-        img_gradient = np.abs(state.grad.numpy())
-        img_gradient = np.sum(img_gradient, axis=(0,1))
-        img_gradient = (img_gradient - np.min(img_gradient)) / (np.max(img_gradient) - np.min(img_gradient))
-        img_gradient = img_gradient.transpose()
-        img_gradient = cv2.resize(img_gradient, (160, 210))[...,np.newaxis]
-        img_gradient = img_gradient * 255
-        masked_img = (img + img_gradient).astype(np.uint8)
-        masked_img = np.clip(masked_img, 0, 255)
+        if gradient:
+            value.backward()
+            img_gradient = np.abs(state.grad.numpy())
+            img_gradient = np.sum(img_gradient, axis=(0,1))
+            img_gradient = (img_gradient - np.min(img_gradient)) / (np.max(img_gradient) - np.min(img_gradient))
+            img_gradient = img_gradient.transpose()
+            img_gradient = cv2.resize(img_gradient, (160, 210))[...,np.newaxis]
+            img_gradient = img_gradient * 255
+            masked_img = (img + img_gradient).astype(np.uint8)
+            masked_img = np.clip(masked_img, 0, 255)
+        else:
+            masked_img = img
         video.write(masked_img)
         next_state, reward, done, _ = env.step(int(action))
 
@@ -65,5 +69,5 @@ def main():
 
 
 if __name__ == '__main__':
-    torch.set_num_threads(1)
+    # torch.set_num_threads(1)
     main()

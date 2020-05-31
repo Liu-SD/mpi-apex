@@ -17,6 +17,7 @@ def argparser():
     parser.add_argument('--split_hidden_layer', type=bool, default=True)
 
     # Environment Arguments
+    parser.add_argument('--num_units', type=int, default=2)
     parser.add_argument('--num_actors', type=int, default=4)
     parser.add_argument('--env', type=str, default="SpaceInvadersNoFrameskip-v4",
                         help='Atari environment to use')
@@ -48,13 +49,13 @@ def argparser():
                         help='Priority exponent')
     parser.add_argument('--beta', type=float, default=0.4,
                         help='Importance sampling exponent')
-    parser.add_argument('--replay_buffer_size', type=int, default=500000,
+    parser.add_argument('--replay_buffer_size', type=int, default=200000,
                         help='Size of prioritized replay buffer')
     parser.add_argument('--initial_exploration_samples', type=int, default=50000,
                         help='Initial random steps')
     parser.add_argument('--threshold_size', type=int, default=50000,
                         help='Threshold for starting to transfer batches to learner')
-    parser.add_argument('--batch_size', type=int, default=64,
+    parser.add_argument('--batch_size', type=int, default=256,
                         help='Size of samples prefetched batches will contain')
     parser.add_argument('--n_recv_batch_worker', type=int, default=1)
     parser.add_argument('--n_recv_prios_worker', type=int, default=1)
