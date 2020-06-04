@@ -10,8 +10,6 @@ from arguments import argparser
 import cv2
 import os
 
-gradient = False
-
 def main():
     args = argparser()
 
@@ -25,33 +23,20 @@ def main():
     # env.seed(seed)
 
     model = DuelingDQN(env, args)
-    model.load_state_dict(torch.load('model.pth', map_location='cpu'))
+    model.load_state_dict(torch.load('model.pth'))
 
     episode_reward, episode_length = 0, 0
     state = env.reset()
     if not os.path.exists('plays'):
         os.mkdir('plays')
-    video = cv2.VideoWriter('plays/tmp.avi', cv2.VideoWriter_fourcc(*'DIVX'), 15, (160, 210))
+    imgs = []
     while True:
         img = env.render(mode='rgb_array')
-        model.zero_grad()
-        state = torch.tensor(state[np.newaxis, :], dtype=torch.float32, requires_grad=True)
+        imgs.append(img)
+        state = torch.tensor(state[np.newaxis, :], dtype=torch.float32)
         value, action = model(state).max(1)
         value = value[0]
         action = action[0]
-        if gradient:
-            value.backward()
-            img_gradient = np.abs(state.grad.numpy())
-            img_gradient = np.sum(img_gradient, axis=(0,1))
-            img_gradient = (img_gradient - np.min(img_gradient)) / (np.max(img_gradient) - np.min(img_gradient))
-            img_gradient = img_gradient.transpose()
-            img_gradient = cv2.resize(img_gradient, (160, 210))[...,np.newaxis]
-            img_gradient = img_gradient * 255
-            masked_img = (img + img_gradient).astype(np.uint8)
-            masked_img = np.clip(masked_img, 0, 255)
-        else:
-            masked_img = img
-        video.write(masked_img)
         next_state, reward, done, _ = env.step(int(action))
 
         state = next_state
@@ -60,12 +45,15 @@ def main():
 
         if done:
             state = env.reset()
-            print("Episode Length / Reward: {} / {}".format(episode_length, episode_reward))
+            print("Episode Length / Reward: {} / {}, making video...".format(episode_length, episode_reward), end="")
+            video = cv2.VideoWriter(f'plays/{args.env}-{episode_reward}.avi', cv2.VideoWriter_fourcc(*'DIVX'), 15, (160, 210))
+            for img in imgs:
+                video.write(img)
             video.release()
-            os.rename('plays/tmp.avi', f'plays/{args.env}-{episode_reward}.avi')
-            video = cv2.VideoWriter('plays/tmp.avi', cv2.VideoWriter_fourcc(*'DIVX'), 15, (160, 210))
+            print("done")
             episode_reward = 0
             episode_length = 0
+            imgs = []
 
 
 if __name__ == '__main__':
