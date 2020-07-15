@@ -46,7 +46,7 @@ def actor(args, actor_id):
     episode_rewards = np.array([0] * num_envs)
     episode_lengths = np.array([0] * num_envs)
     states = np.array([env.reset() for env in envs])
-    tb_dict = {key: [] for key in ['episode_reward', 'episode_length']}
+    tb_dict = {key: [] for key in ['episode_reward', 'episode_length', 'kept_sample_percentage']}
     step_t = time.time()
     inf_t = 0
     sim_t = 0
@@ -107,9 +107,11 @@ def actor(args, actor_id):
                     writer.add_scalar('actor/6_step_time', (time.time() - step_t) / np.sum(episode_lengths), tb_idx)
                     writer.add_scalar('actor/7_step_inference_time', inf_t / np.sum(episode_lengths), tb_idx)
                     writer.add_scalar('actor/8_step_simulation_time', sim_t / np.sum(episode_lengths), tb_idx)
+                    writer.add_scalar('actor/9_kept_sample_percentage', np.mean(tb_dict['kept_sample_percentage']), tb_idx)
                     inf_t = 0
                     sim_t = 0
                     step_t = time.time()
+                    tb_dict['kept_sample_percentage'].clear()
 
         actor_idx += 1
 
@@ -131,6 +133,11 @@ def actor(args, actor_id):
                 storage.reset()
             batch = [np.concatenate(v) for v in zip(*batch)]
             prios = np.concatenate(prios)
+            threshold = 0.01
+            prios_mask = prios > np.max(prios) * threshold
+            tb_dict['kept_sample_percentage'].append(np.sum(prios_mask) / len(prios_mask))
+            prios = prios[prios_mask]
+            batch = [i[prios_mask] for i in batch]
             data = pickle.dumps((batch, prios))
             if len(send_batch_request_queue) == send_batch_request_maxsize:
                 index, _ = Request.waitany(send_batch_request_queue)

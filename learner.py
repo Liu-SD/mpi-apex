@@ -107,8 +107,13 @@ def learner(args):
     learn_idx = 0
     ts = time.time()
     tb_dict = {k: [] for k in ['loss', 'grad_norm', 'max_q', 'mean_q', 'min_q', 'batch_queue_size', 'tensor_queue_size', 'prios_queue_size']}
+    first_rount = True
     while True:
         (*batch, idxes) = tensor_queue.get()
+        if first_rount:
+            print("start training")
+            sys.stdout.flush()
+            first_rount = False
         loss, prios, q_values = utils.compute_loss(model, tgt_model, batch, args.n_steps, args.gamma)
 
         optimizer.zero_grad()
