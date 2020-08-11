@@ -17,7 +17,8 @@ def argparser():
     parser.add_argument('--split_hidden_layer', type=bool, default=True)
 
     # Environment Arguments
-    parser.add_argument('--num_units', type=int, default=2)
+    parser.add_argument('--prefix', type=str, default='')
+    parser.add_argument('--num_units', type=int, default=4)
     parser.add_argument('--num_actors', type=int, default=4)
     parser.add_argument('--env', type=str, default="SpaceInvadersNoFrameskip-v4",
                         help='Atari environment to use')
@@ -57,34 +58,19 @@ def argparser():
                         help='Threshold for starting to transfer batches to learner')
     parser.add_argument('--batch_size', type=int, default=256,
                         help='Size of samples prefetched batches will contain')
-    parser.add_argument('--n_recv_batch_worker', type=int, default=1)
-    parser.add_argument('--n_recv_prios_worker', type=int, default=1)
-    parser.add_argument('--n_send_batch_worker', type=int, default=2)
 
     # Arguments for Learner
-    parser.add_argument('--lr', type=float, default=5e-5)#6.25e-5)
-    parser.add_argument('--queue_size', type=int, default=4,
-                        help='Size of local queue. If this value is set to 16, '
-                             'local queue can contain up to 16 prefetched batches')
-    parser.add_argument('--prios_queue_size', type=int, default=4)
-    parser.add_argument('--max_norm', type=float, default=40.0,
-                        help='Maximum gradient norm to clip')
+    parser.add_argument('--lr', type=float, default=1e-4)#6.25e-5)
     parser.add_argument('--cuda', action='store_true', default=True,
                         help='Enables CUDA training')
-    parser.add_argument('--target_update_interval', type=int, default=2000,
+    parser.add_argument('--target_update_interval', type=int, default=100,#2000,
                         help='Interval of updating target network')
-    parser.add_argument('--soft_target_update', type=bool, default=False,
-                        help='Whether to use soft target updae method')
-    parser.add_argument('--tau', type=float, default=0.01,
-                        help='Soft update rate tau')
     parser.add_argument('--publish_param_interval', type=int, default=25,
                         help='Interval of publishing parameter to actors')
     parser.add_argument('--save_interval', type=int, default=5000,
                         help='Interval of saving model parameters')
     parser.add_argument('--tb_interval', type=int, default=30,
                         help='Interval of logging tensorboard')
-    parser.add_argument('--n_recv_batch_process', type=int, default=4,
-                        help='Number of processes to receive batch from replay')
 
     # Arguments for Evaluation
     parser.add_argument('--render', action='store_true', default=False)

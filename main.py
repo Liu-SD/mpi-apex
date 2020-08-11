@@ -17,7 +17,7 @@ def set_context(n_units, n_actors):
     rank_evaluator = n_actors + 2
 
     comm_world = MPI.COMM_WORLD
-    assert comm_world.Get_size() == (n_actors + 3) * n_units
+    assert comm_world.Get_size() == (n_actors + 3) * n_units, f'expect {(n_actors + 3) * n_units} procs'
     rank_world = comm_world.Get_rank()
 
     comm_local = comm_world.Split(rank_world // (n_actors + 3), rank_world)

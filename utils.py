@@ -74,18 +74,3 @@ def compute_loss(model, tgt_model, batch, n_steps, gamma=0.99):
     return loss, prios, q_values
 
 
-def update_parameters(loss, model, optimizer, max_norm):
-    """
-    Update parameters with loss
-    """
-    optimizer.zero_grad()
-    loss.backward()
-    total_norm = 0.
-    for p in model.parameters():
-        param_norm = p.grad.data.norm(2)
-        total_norm += param_norm ** (1. / 2)
-    total_norm = total_norm ** (1. / 2)
-    # torch.nn.utils.clip_grad.clip_grad_norm_(model.parameters(), max_norm)
-    optimizer.step()
-    return total_norm
-

@@ -17,7 +17,7 @@ import sys
 
 def actor(args, actor_id):
     comm = global_dict['comm_local']
-    writer = SummaryWriter(comment="-{}-{}-actor{}".format(args.env, global_dict['unit_idx'], actor_id))
+    writer = SummaryWriter(comment="-{}-{}-{}-actor{}".format(args.prefix, args.env, global_dict['unit_idx'], actor_id))
 
     num_envs = args.num_envs_per_worker
     envs = [wrap_atari_dqn(make_atari(args.env), args) for _ in range(num_envs)]
@@ -51,13 +51,8 @@ def actor(args, actor_id):
     inf_t = 0
     sim_t = 0
 
-    episode_lengths_running_mean = np.array([1] * num_envs)
-    running_mean_alpha = 0.99
-    def make_episilons(): # cosine schedule
+    def make_episilons():
         return epsilons
-        scale = np.cos(np.pi + np.pi * episode_lengths / episode_lengths_running_mean) / 2 + 0.5
-        scale[episode_lengths > episode_lengths_running_mean] = 1
-        return epsilons * scale
 
     while True:
         if recv_param_request and recv_param_request.Test():
@@ -88,9 +83,6 @@ def actor(args, actor_id):
             if done or episode_lengths[i] == args.max_episode_length:
                 states[i] = env.reset()
             if real_done or episode_lengths[i] == args.max_episode_length:
-                episode_lengths_running_mean[i] = \
-                    episode_lengths_running_mean[i] * running_mean_alpha + episode_lengths[i] * (1 - running_mean_alpha)
-
                 tb_idx += 1
                 tb_dict["episode_reward"].append(episode_rewards[i])
                 tb_dict["episode_length"].append(episode_lengths[i])

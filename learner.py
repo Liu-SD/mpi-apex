@@ -13,6 +13,7 @@ import queue
 import threading
 import pickle
 import sys
+import horovod.torch as hvd
 
 prios_sum = 1.0
 
@@ -27,6 +28,7 @@ def recv_batch(queue):
         queue.put(batch)
 
 def to_tensor(in_queue, out_queue, device):
+    torch.cuda.set_device(hvd.local_rank())
     torch.set_num_threads(1)
     while True:
         msg = in_queue.get()
@@ -77,6 +79,8 @@ def learner(args):
     comm = global_dict['comm_local']
     comm_cross = global_dict['comm_cross']
     size_cross = comm_cross.Get_size()
+    hvd.init(comm=comm_cross)
+    torch.cuda.set_device(hvd.local_rank())
     env = wrap_atari_dqn(make_atari(args.env), args)
     # utils.set_global_seeds(args.seed, use_torch=True)
 
@@ -87,13 +91,19 @@ def learner(args):
         pass
 
     tgt_model = DuelingDQN(env, args).to(device)
-    tgt_model.load_state_dict(model.state_dict())
     del env
 
-    writer = SummaryWriter(comment="-{}-{}-learner".format(args.env, global_dict['unit_idx']))
-    # optimizer = torch.optim.SGD(model.parameters(), 3e-2)
-    optimizer = torch.optim.Adam(model.parameters(), args.lr)
+    writer = SummaryWriter(comment="-{}-{}-{}-learner".format(args.prefix, args.env, global_dict['unit_idx']))
+    writer2 = SummaryWriter(comment="-{}-{}-{}-learner2".format(args.prefix, args.env, global_dict['unit_idx']))
+    # optimizer = torch.optim.SGD(model.parameters(), 1e-5 * args.num_units, momentum=0.8)
     # optimizer = torch.optim.RMSprop(model.parameters(), args.lr, alpha=0.95, eps=1.5e-7, centered=True)
+    optimizer = torch.optim.Adam(model.parameters(), args.lr * args.num_units)
+    optimizer = hvd.DistributedOptimizer(optimizer, named_parameters=model.named_parameters())
+    hvd.broadcast_parameters(model.state_dict(), root_rank=0)
+    tgt_model.load_state_dict(model.state_dict())
+    warmup_step = 5e3
+    grad_norm_running_mean = 1
+    grad_norm_lambda = 0.99
 
     batch_queue = queue.Queue(maxsize=3)
     tensor_queue = queue.Queue(maxsize=4)
@@ -118,28 +128,15 @@ def learner(args):
 
         optimizer.zero_grad()
         loss.backward()
-        global_prios_sum = np.array(prios_sum)
-        comm_cross.Allreduce(MPI.IN_PLACE, global_prios_sum.data)
-        global_prios_sum = float(global_prios_sum)
-        scale = prios_sum / global_prios_sum
-        grad_norm = 0.
-        for p in model.parameters():
-            param_norm = p.grad.data.norm(2)
-            grad_norm += param_norm ** (1. / 2)
-
-            if learn_idx == 1e4:
-                state_dict = model.state_dict()
-                for k, v in state_dict.items():
-                    v = v.cpu().numpy()
-                    comm_cross.Bcast(v.data, root=0)
-                    state_dict[k] = torch.Tensor(v).to(device)
-                model.load_state_dict(state_dict)
-            grad = p.grad.cpu().numpy() * scale
-            comm_cross.Allreduce(MPI.IN_PLACE, grad.data)
-            grad = torch.Tensor(grad).to(device)
-            if learn_idx >= 1e4:
-                p.grad = grad
-        grad_norm = grad_norm  ** (1. / 2)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), grad_norm_running_mean * 2)
+        grad_norm = min(grad_norm, grad_norm_running_mean * 2)
+        grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 100)
+        grad_norm = min(grad_norm, 100)
+        grad_norm_running_mean = grad_norm_running_mean * grad_norm_lambda + grad_norm * (1-grad_norm_lambda)
+        # global_prios_sum = np.array(prios_sum)
+        # comm_cross.Allreduce(MPI.IN_PLACE, global_prios_sum.data)
+        # global_prios_sum = float(global_prios_sum)
+        # scale = prios_sum / global_prios_sum
         optimizer.step()
 
         prios_queue.put((idxes, prios))
@@ -153,12 +150,7 @@ def learner(args):
         tb_dict["tensor_queue_size"].append(tensor_queue.qsize())
         tb_dict["prios_queue_size"].append(prios_queue.qsize())
 
-        if args.soft_target_update:
-            tau = args.tau
-            for p_tgt, p in zip(tgt_model.parameters(), model.parameters()):
-                p_tgt.data *= 1-tau
-                p_tgt.data += tau * p
-        elif learn_idx % args.target_update_interval == 0:
+        if learn_idx % args.target_update_interval == 0:
             tgt_model.load_state_dict(model.state_dict())
         if learn_idx % args.save_interval == 0:
             torch.save(model.state_dict(), "model.pth")
@@ -170,4 +162,5 @@ def learner(args):
                 writer.add_scalar(f'learner/{i+1}_{k}', np.mean(v), learn_idx)
                 v.clear()
             writer.add_scalar(f"learner/{i+2}_BPS", bps, learn_idx)
+            writer2.add_scalar("learner/2_grad_norm", grad_norm_running_mean*2, learn_idx)
             ts = time.time()

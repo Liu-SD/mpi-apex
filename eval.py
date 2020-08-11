@@ -12,7 +12,7 @@ import pickle
 
 def evaluator(args):
     comm = global_dict['comm_local']
-    writer = SummaryWriter(comment="-{}-{}-eval".format(args.env, global_dict['unit_idx']))
+    writer = SummaryWriter(comment="-{}-{}-{}-eval".format(args.prefix, args.env, global_dict['unit_idx']))
 
     args.clip_rewards = False
     args.episode_life = False

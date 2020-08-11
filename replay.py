@@ -52,7 +52,7 @@ def replay(args):
     comm = global_dict['comm_local']
     prev_t = time.time()
     global push_size, sample_size
-    writer = SummaryWriter(comment=f"-{args.env}-{global_dict['unit_idx']}-replay")
+    writer = SummaryWriter(comment=f"-{args.prefix}-{args.env}-{global_dict['unit_idx']}-replay")
     tb_step = 0
 
     buffer = CustomPrioritizedReplayBuffer(args.replay_buffer_size, args.alpha)
