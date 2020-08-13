@@ -13,12 +13,12 @@ import os
 def main():
     args = argparser()
 
-    args.clip_rewards = False
-    args.episode_life=False
-    env = make_atari(args.env)
+    args['clip_rewards'] = False
+    args['episode_life'] = False
+    env = make_atari(args['env'])
     env = wrap_atari_dqn(env, args)
 
-    # seed = args.seed + 1122
+    # seed = args['seed'] + 1122
     # utils.set_global_seeds(seed, use_torch=True)
     # env.seed(seed)
 
@@ -46,7 +46,7 @@ def main():
         if done:
             state = env.reset()
             print("Episode Length / Reward: {} / {}, making video...".format(episode_length, episode_reward), end="")
-            video = cv2.VideoWriter(f'plays/{args.env}-{episode_reward}.avi', cv2.VideoWriter_fourcc(*'DIVX'), 15, (160, 210))
+            video = cv2.VideoWriter(f'plays/{args['env']}-{episode_reward}.avi', cv2.VideoWriter_fourcc(*'DIVX'), 15, (160, 210))
             for img in imgs:
                 video.write(img)
             video.release()

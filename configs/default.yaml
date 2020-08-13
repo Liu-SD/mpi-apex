@@ -1,0 +1,41 @@
+seed: 1122
+n_steps: 3
+gamma: 0.99
+hidden_neurons: 1024
+split_hidden_layer: True
+
+prefix: default
+num_units: 4
+num_actors: 4
+env: SpaceInvadersNoFrameskip-v4
+episode_life: True
+clip_rewards: True
+frame_stack: True
+scale: False
+num_envs_per_worker: 8
+
+send_interval: 50
+update_interval: 400
+max_episode_length: 50000
+eps_base: 0.4
+eps_alpha: 7.0
+
+alpha: 0.6
+beta: 0.4
+replay_buffer_size: 200000
+initial_exploration_samples: 50000
+threshold_size: 50000
+batch_size: 256
+
+lr: 1.e-4
+cuda: True
+target_update_interval: 100
+publish_param_interval: 25
+save_interval: 5000
+tb_interval: 30
+
+dynamic_gradient_clip: False
+gradient_norm_running_mean: 1
+gradient_norm_lambda: 0.99
+clipping_threshold: 2
+dropping_threshold: False

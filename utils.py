@@ -9,20 +9,11 @@ import logging
 from datetime import datetime
 import sys
 
-##########################################
-# global constant for MPI communications #
 global_dict = dict()
 
 TAG_RECV_BATCH = 1
 TAG_SEND_BATCH = 2
 TAG_RECV_PRIOS = 3
-##########################################
-
-
-def print_args(args):
-    print(' ' * 26 + 'Options')
-    for k, v in vars(args).items():
-        print(' ' * 26 + k + ': ' + str(v))
 
 
 def set_global_seeds(seed, use_torch=False):
@@ -33,26 +24,6 @@ def set_global_seeds(seed, use_torch=False):
 
     np.random.seed(seed)
     random.seed(seed)
-
-
-def array2png(arr):
-    rgb_image = Image.fromarray(arr)
-    output_io = io.BytesIO()
-    rgb_image.save(output_io, format="PNG")
-    png_image = output_io.getvalue()
-    output_io.close()
-    rgb_image.close()
-    return png_image
-
-
-def png2array(png):
-    png_io = io.BytesIO(png)
-    png_image = Image.open(png_io)
-    rgb_array = np.array(png_image)
-    png_image.close()
-    png_io.close()
-    return rgb_array
-
 
 def compute_loss(model, tgt_model, batch, n_steps, gamma=0.99):
     states, actions, rewards, next_states, dones, weights = batch

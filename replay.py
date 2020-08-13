@@ -24,24 +24,24 @@ def worker(args, task_type, buf, lock, buffer, start_sending_batch_condition):
             for i, sample in enumerate(zip(*batch, prios)):
                 buffer.add(*sample)
         push_size += i+1
-        if len(buffer) - (i+1) < args.threshold_size and len(buffer) >= args.threshold_size:
+        if len(buffer) - (i+1) < args['threshold_size'] and len(buffer) >= args['threshold_size']:
             with start_sending_batch_condition:
                 start_sending_batch_condition.notify_all()
     elif task_type == 1: # batch send
-        if len(buffer) < args.threshold_size:
+        if len(buffer) < args['threshold_size']:
             with start_sending_batch_condition:
                 start_sending_batch_condition.wait()
-        assert len(buffer) >= args.threshold_size
-        beta = args.beta
-        beta_step = (1 - beta) / 1e7 * args.batch_size
+        assert len(buffer) >= args['threshold_size']
+        beta = args['beta']
+        beta_step = (1 - beta) / 1e7 * args['batch_size']
         while True:
             with lock:
                 beta = min(1, beta + beta_step)
-                batch = buffer.sample(args.batch_size, beta)
+                batch = buffer.sample(args['batch_size'], beta)
                 prios_sum = buffer._it_sum.sum()
             data = pickle.dumps((batch, prios_sum))
             comm.Send(data, dest=global_dict['rank_learner'])
-            sample_size += args.batch_size
+            sample_size += args['batch_size']
     elif task_type == 2: # prios recv
         idxes, prios = pickle.loads(buf)
         with lock:
@@ -52,10 +52,10 @@ def replay(args):
     comm = global_dict['comm_local']
     prev_t = time.time()
     global push_size, sample_size
-    writer = SummaryWriter(comment=f"-{args.prefix}-{args.env}-{global_dict['unit_idx']}-replay")
+    writer = SummaryWriter(log_dir=os.path.join(args['log_dir'], f'{global_dict["unit_idx"]}-replay'))
     tb_step = 0
 
-    buffer = CustomPrioritizedReplayBuffer(args.replay_buffer_size, args.alpha)
+    buffer = CustomPrioritizedReplayBuffer(args['replay_buffer_size'], args['alpha'])
     bufs = [
         bytearray(50*1024*1024),
         bytearray(1),

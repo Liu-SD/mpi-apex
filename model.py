@@ -24,8 +24,8 @@ class DuelingDQN(nn.Module):
         self.num_actions = env.action_space.n
         self.obs_high = np.mean(env.observation_space.high)
         self.obs_low = np.mean(env.observation_space.low)
-        self.hidden_neurons = args.hidden_neurons
-        self.split = args.split_hidden_layer
+        self.hidden_neurons = args['hidden_neurons']
+        self.split = args['split_hidden_layer']
 
         self.features = self.feature_backbone()
         fc_neurons = self.hidden_neurons // 2 if self.split else self.hidden_neurons

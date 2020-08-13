@@ -17,29 +17,27 @@ import sys
 
 def actor(args, actor_id):
     comm = global_dict['comm_local']
-    writer = SummaryWriter(comment="-{}-{}-{}-actor{}".format(args.prefix, args.env, global_dict['unit_idx'], actor_id))
+    writer = SummaryWriter(log_dir=os.path.join(args['log_dir'], f'{global_dict["unit_idx"]}-actor{actor_id}'))
 
-    num_envs = args.num_envs_per_worker
-    envs = [wrap_atari_dqn(make_atari(args.env), args) for _ in range(num_envs)]
+    num_envs = args['num_envs_per_worker']
+    envs = [wrap_atari_dqn(make_atari(args['env']), args) for _ in range(num_envs)]
 
-    if args.seed is not None:
-        seeds = args.seed + actor_id * num_envs + np.arange(num_envs)
+    if args['seed'] is not None:
+        seeds = args['seed'] + actor_id * num_envs + np.arange(num_envs)
         utils.set_global_seeds(seeds[0], use_torch=True)
         for seed, env in zip(seeds, envs):
             env.seed(int(seed))
 
     model = DuelingDQN(envs[0], args)
     model = torch.jit.trace(model, torch.zeros((1,4,84,84)))
-    _actor_id = (np.arange(num_envs) + actor_id * num_envs) * args.num_units + global_dict['unit_idx']
-    n_actors = args.num_actors * num_envs * args.num_units
-    epsilons = args.eps_base ** (1 + _actor_id / (n_actors - 1) * args.eps_alpha)
-    storages = [BatchStorage(args.n_steps, args.gamma) for _ in range(num_envs)]
+    _actor_id = (np.arange(num_envs) + actor_id * num_envs) * args['num_units'] + global_dict['unit_idx']
+    n_actors = args['num_actors'] * num_envs * args['num_units']
+    epsilons = args['eps_base'] ** (1 + _actor_id / (n_actors - 1) * args['eps_alpha'])
+    storages = [BatchStorage(args['n_steps'], args['gamma']) for _ in range(num_envs)]
 
     recv_param_buf = bytearray(100*1024*1024)
     recv_param_request = None
-
-    send_batch_request_queue = []
-    send_batch_request_maxsize = args.max_outstanding
+    send_batch_request = None
 
     actor_idx = 0
     tb_idx = 0
@@ -59,7 +57,7 @@ def actor(args, actor_id):
             param = pickle.loads(recv_param_buf)
             model.load_state_dict(param)
             recv_param_request = None
-        if actor_idx * num_envs * n_actors <= args.initial_exploration_samples: # initial random exploration
+        if actor_idx * num_envs * n_actors <= args['initial_exploration_samples']: # initial random exploration
             random_idx = np.arange(num_envs)
         else:
             random_idx, = np.where(np.random.random(num_envs) <= make_episilons())
@@ -80,15 +78,15 @@ def actor(args, actor_id):
             states[i] = next_state
             episode_rewards[i] += reward
             episode_lengths[i] += 1
-            if done or episode_lengths[i] == args.max_episode_length:
+            if done or episode_lengths[i] == args['max_episode_length']:
                 states[i] = env.reset()
-            if real_done or episode_lengths[i] == args.max_episode_length:
+            if real_done or episode_lengths[i] == args['max_episode_length']:
                 tb_idx += 1
                 tb_dict["episode_reward"].append(episode_rewards[i])
                 tb_dict["episode_length"].append(episode_lengths[i])
                 episode_rewards[i] = 0
                 episode_lengths[i] = 0
-                if tb_idx % args.tb_interval == 0:
+                if tb_idx % args['tb_interval'] == 0:
                     writer.add_scalar('actor/1_episode_reward_mean', np.mean(tb_dict['episode_reward']), tb_idx)
                     writer.add_scalar('actor/2_episode_reward_max', np.max(tb_dict['episode_reward']), tb_idx)
                     writer.add_scalar('actor/3_episode_reward_min', np.min(tb_dict['episode_reward']), tb_idx)
@@ -107,7 +105,7 @@ def actor(args, actor_id):
 
         actor_idx += 1
 
-        if actor_idx % args.update_interval == 0:
+        if actor_idx % args['update_interval'] == 0:
             if recv_param_request is not None:
                 print(f"actor {global_dict['unit_idx']}-{actor_id}: last recv param request is not complete!")
                 sys.stdout.flush()
@@ -115,7 +113,7 @@ def actor(args, actor_id):
                 comm.Send(b'', dest=global_dict['rank_learner'])
                 recv_param_request = comm.Irecv(buf=recv_param_buf, source=global_dict['rank_learner'])
 
-        if sum(len(storage) for storage in storages) >= args.send_interval * num_envs:
+        if sum(len(storage) for storage in storages) >= args['send_interval'] * num_envs:
             batch = []
             prios = []
             for storage in storages:
@@ -131,8 +129,6 @@ def actor(args, actor_id):
             prios = prios[prios_mask]
             batch = [i[prios_mask] for i in batch]
             data = pickle.dumps((batch, prios))
-            if len(send_batch_request_queue) == send_batch_request_maxsize:
-                index, _ = Request.waitany(send_batch_request_queue)
-                send_batch_request_queue[index] = comm.Isend(data, dest=global_dict['rank_replay'], tag=utils.TAG_RECV_BATCH)
-            else:
-                send_batch_request_queue.append(comm.Isend(data, dest=global_dict['rank_replay'], tag=utils.TAG_RECV_BATCH))
+            if send_batch_request is not None:
+                send_batch_request.wait()
+            send_batch_request = comm.Isend(data, dest=global_dict['rank_replay'], tag=utils.TAG_RECV_BATCH)

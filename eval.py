@@ -9,17 +9,18 @@ from model import DuelingDQN
 from mpi4py import MPI
 from datetime import datetime
 import pickle
+import os
 
 def evaluator(args):
-    comm = global_dict['comm_local']
-    writer = SummaryWriter(comment="-{}-{}-{}-eval".format(args.prefix, args.env, global_dict['unit_idx']))
+    comm = global_dict['comm_world']
+    writer = SummaryWriter(log_dir=os.path.join(args['log_dir'], 'eval'))
 
-    args.clip_rewards = False
-    args.episode_life = False
-    env = make_atari(args.env)
+    args['clip_rewards'] = False
+    args['episode_life'] = False
+    env = make_atari(args['env'])
     env = wrap_atari_dqn(env, args)
 
-    seed = args.seed - 1
+    seed = args['seed'] - 1
     utils.set_global_seeds(seed, use_torch=True)
     env.seed(seed)
 
@@ -43,7 +44,7 @@ def evaluator(args):
         episode_reward += reward
         episode_length += 1
 
-        if done or episode_length == args.max_episode_length:
+        if done or episode_length == args['max_episode_length']:
             state = env.reset()
             tb_dict["episode_reward"].append(episode_reward)
             tb_dict["episode_length"].append(episode_length)
@@ -55,7 +56,7 @@ def evaluator(args):
             param = pickle.loads(recv_param_buf)
             model.load_state_dict(param)
 
-            if (episode_idx * args.num_envs_per_worker) % args.tb_interval == 0:
+            if (episode_idx * args['num_envs_per_worker']) % args['tb_interval'] == 0:
                 writer.add_scalar('evaluator/1_episode_reward_mean', np.mean(tb_dict['episode_reward']), episode_idx)
                 writer.add_scalar('evaluator/2_episode_reward_max', np.max(tb_dict['episode_reward']), episode_idx)
                 writer.add_scalar('evaluator/3_episode_reward_min', np.min(tb_dict['episode_reward']), episode_idx)
