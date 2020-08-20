@@ -7,6 +7,8 @@ import operator
 import numpy as np
 import pandas as pd
 import os
+import time
+import sys
 
 
 class SegmentTree(object):
@@ -35,7 +37,7 @@ class SegmentTree(object):
         """
         assert capacity > 0 and capacity & (capacity - 1) == 0, "capacity must be positive and a power of 2."
         self._capacity = capacity
-        self._value = [neutral_element for _ in range(2 * capacity)]
+        self._value = np.array([neutral_element for _ in range(2 * capacity)])
         self._operation = operation
 
     def _reduce_helper(self, start, end, node, node_start, node_end):
@@ -88,7 +90,7 @@ class SegmentTree(object):
             idx //= 2
 
     def __getitem__(self, idx):
-        assert 0 <= idx < self._capacity
+        # assert 0 <= idx < self._capacity
         return self._value[self._capacity + idx]
 
 
@@ -127,6 +129,15 @@ class SumSegmentTree(SegmentTree):
             else:
                 prefixsum -= self._value[2 * idx]
                 idx = 2 * idx + 1
+        return idx - self._capacity
+
+    def batch_find_prefixsum_idx(self, prefixsum_arr):
+        assert (0 <= prefixsum_arr).all() and (prefixsum_arr <= self.sum() + 1e-5).all()
+        idx = np.ones(len(prefixsum_arr), dtype=int)
+        while np.max(idx) < self._capacity:
+            boolean = self._value[2*idx] <= prefixsum_arr
+            prefixsum_arr -= boolean * self._value[2*idx]
+            idx = 2*idx + boolean
         return idx - self._capacity
 
 
@@ -249,6 +260,13 @@ class PrioritizedReplayBuffer(ReplayBuffer):
             res.append(idx)
         return res
 
+    def _batch_sample_proportional(self, batch_size):
+        p_total = self._it_sum.sum(0, len(self._storage) - 1)
+        every_range_len = p_total / batch_size
+        mass_arr = (np.arange(batch_size) + np.random.random(batch_size)) * every_range_len
+        res = self._it_sum.batch_find_prefixsum_idx(mass_arr)
+        return res
+
     def sample(self, batch_size, beta):
         """Sample a batch of experiences.
         compared to ReplayBuffer.sample
@@ -283,17 +301,14 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         """
         assert beta > 0
 
-        idxes = self._sample_proportional(batch_size)
+        idxes = self._batch_sample_proportional(batch_size)
 
         weights = []
         p_min = self._it_min.min() / self._it_sum.sum()
         max_weight = (p_min * len(self._storage)) ** (-beta)
 
-        for idx in idxes:
-            p_sample = self._it_sum[idx] / self._it_sum.sum()
-            weight = (p_sample * len(self._storage)) ** (-beta)
-            weights.append(weight / max_weight)
-        weights = np.array(weights)
+        p_samples = self._it_sum[idxes] / self._it_sum.sum()
+        weights = (p_samples * len(self._storage)) ** (-beta) / max_weight
         encoded_sample = self._encode_sample(idxes)
         return tuple(list(encoded_sample) + [weights, idxes])
 

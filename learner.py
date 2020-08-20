@@ -27,25 +27,6 @@ def recv_batch(queue):
         batch, prios_sum = pickle.loads(recv_batch_buffer)
         queue.put(batch)
 
-def to_tensor(in_queue, out_queue, device):
-    torch.cuda.set_device(hvd.local_rank())
-    torch.set_num_threads(1)
-    while True:
-        msg = in_queue.get()
-
-        states, actions, rewards, next_states, dones, _, _, weights, idxes = msg
-        states = np.array([np.array(state) for state in states])
-        states = torch.FloatTensor(states).to(device)
-        actions = torch.LongTensor(actions).to(device)
-        rewards = torch.FloatTensor(rewards).to(device)
-        next_states = np.array([np.array(state) for state in next_states])
-        next_states = torch.FloatTensor(next_states).to(device)
-        dones = torch.FloatTensor(dones).to(device)
-        weights = torch.FloatTensor(weights).to(device)
-        batch = [states, actions, rewards, next_states, dones, weights, idxes]
-
-        out_queue.put(batch)
-
 def send_prios(queue):
     comm = global_dict['comm_local']
     send_prios_request = None
@@ -86,11 +67,54 @@ def send_param_evaluator(queue):
         comm.Send(data, dest=global_dict['rank_evaluator'])
         send_param_request = comm.Irecv(buf=buf, source=global_dict['rank_evaluator'])
 
+class data_prefetcher:
+    def __init__(self, queue, cuda):
+        self.queue = queue
+        self.cuda = cuda
+        if self.cuda:
+            self.stream = torch.cuda.Stream()
+        self.preload()
+
+    def preload(self):
+        msg = self.queue.get()
+
+        states, actions, rewards, next_states, dones, _, _, weights, idxes = msg
+        self._states = np.array([np.array(state) for state in states])
+        self._states = torch.FloatTensor(self._states)
+        self._actions = torch.LongTensor(actions)
+        self._rewards = torch.FloatTensor(rewards)
+        self._next_states = np.array([np.array(state) for state in next_states])
+        self._next_states = torch.FloatTensor(self._next_states)
+        self._dones = torch.FloatTensor(dones)
+        self._weights = torch.FloatTensor(weights)
+        self._idxes = idxes
+
+        if self.cuda:
+            with torch.cuda.stream(self.stream):
+                self._states = self._states.cuda(non_blocking=True)
+                self._actions = self._actions.cuda(non_blocking=True)
+                self._rewards = self._rewards.cuda(non_blocking=True)
+                self._next_states = self._next_states.cuda(non_blocking=True)
+                self._dones = self._dones.cuda(non_blocking=True)
+                self._weights = self._weights.cuda(non_blocking=True)
+
+    def next(self):
+        if self.cuda:
+            torch.cuda.current_stream().wait_stream(self.stream)
+        states = self._states
+        actions = self._actions
+        rewards = self._rewards
+        next_states = self._next_states
+        dones = self._dones
+        weights = self._weights
+        idxes = self._idxes
+        self.preload()
+        return states, actions, rewards, next_states, dones, weights, idxes
 
 def learner(args):
     comm_cross = global_dict['comm_cross']
     hvd.init(comm=comm_cross)
-    # torch.cuda.set_device(hvd.local_rank())
+    torch.cuda.set_device(hvd.local_rank())
     env = wrap_atari_dqn(make_atari(args['env']), args)
     # utils.set_global_seeds(args['seed'], use_torch=True)
 
@@ -115,22 +139,22 @@ def learner(args):
         grad_norm_lambda = args['gradient_norm_lambda']
 
     batch_queue = queue.Queue(maxsize=3)
-    tensor_queue = queue.Queue(maxsize=4)
     prios_queue = queue.Queue(maxsize=4)
     param_queue = queue.Queue(maxsize=3)
     threading.Thread(target=recv_batch, args=(batch_queue,)).start()
-    threading.Thread(target=to_tensor, args=(batch_queue, tensor_queue, device)).start()
     threading.Thread(target=send_prios, args=(prios_queue,)).start()
     threading.Thread(target=send_param, args=(param_queue,)).start()
     if global_dict['unit_idx'] == 0:
         threading.Thread(target=send_param_evaluator, args=(param_queue,)).start()
 
+    prefetcher = data_prefetcher(batch_queue, args['cuda'])
+
     learn_idx = 0
     ts = time.time()
-    tb_dict = {k: [] for k in ['loss', 'grad_norm', 'max_q', 'mean_q', 'min_q', 'batch_queue_size', 'tensor_queue_size', 'prios_queue_size']}
+    tb_dict = {k: [] for k in ['loss', 'grad_norm', 'max_q', 'mean_q', 'min_q', 'batch_queue_size', 'prios_queue_size']}
     first_rount = True
     while True:
-        (*batch, idxes) = tensor_queue.get()
+        (*batch, idxes) = prefetcher.next()
         if first_rount:
             print("start training")
             sys.stdout.flush()
@@ -162,12 +186,11 @@ def learner(args):
         tb_dict["mean_q"].append(float(torch.mean(q_values)))
         tb_dict["min_q"].append(float(torch.min(q_values)))
         tb_dict["batch_queue_size"].append(batch_queue.qsize())
-        tb_dict["tensor_queue_size"].append(tensor_queue.qsize())
         tb_dict["prios_queue_size"].append(prios_queue.qsize())
 
         if learn_idx % args['target_update_interval'] == 0:
             tgt_model.load_state_dict(model.state_dict())
-        if learn_idx % args['save_interval'] == 0:
+        if  learn_idx % args['save_interval'] == 0 and global_dict['unit_idx'] == 0:
             torch.save(model.state_dict(), "model.pth")
         if learn_idx % args['publish_param_interval'] == 0:
             param_queue.put(model.state_dict())

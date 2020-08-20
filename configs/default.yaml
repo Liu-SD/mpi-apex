@@ -5,33 +5,34 @@ hidden_neurons: 1024
 split_hidden_layer: True
 
 prefix: default
-num_units: 4
-num_actors: 4
+num_units: 1
+num_actors: 16
 env: SpaceInvadersNoFrameskip-v4
 episode_life: True
 clip_rewards: True
 frame_stack: True
 scale: False
-num_envs_per_worker: 8
+num_envs_per_worker: 16
 
 send_interval: 50
 update_interval: 400
 max_episode_length: 50000
+sample_filter_threshold: 0
 eps_base: 0.4
 eps_alpha: 7.0
 
 alpha: 0.6
 beta: 0.4
-replay_buffer_size: 200000
+replay_buffer_size: 2000000
 initial_exploration_samples: 50000
 threshold_size: 50000
-batch_size: 256
+batch_size: 512
 
 lr: 1.e-4
 cuda: True
-target_update_interval: 100
+target_update_interval: 2500
 publish_param_interval: 25
-save_interval: 5000
+save_interval: 50000
 tb_interval: 30
 
 dynamic_gradient_clip: False

@@ -1,7 +1,8 @@
 # vscode
 .vscode/
 # tensorboard logs
-runs/
+results/
+saved_runs/
 plays/
 # model
 *.pth

@@ -72,7 +72,10 @@ def actor(args, actor_id):
         for i, (state, q_value, action, env, storage) in enumerate(zip(states, q_values, actions, envs, storages)):
             _t = time.time()
             next_state, reward, done, _ = env.step(action)
-            real_done = env.was_real_done
+            try:
+                real_done = env.was_real_done
+            except:
+                real_done = done
             sim_t += time.time() - _t
             storage.add(np.array(state), reward, action, done, real_done, q_value, _t, episode_lengths[i])
             states[i] = next_state
@@ -123,7 +126,7 @@ def actor(args, actor_id):
                 storage.reset()
             batch = [np.concatenate(v) for v in zip(*batch)]
             prios = np.concatenate(prios)
-            threshold = 0.01
+            threshold = args['sample_filter_threshold']
             prios_mask = prios > np.max(prios) * threshold
             tb_dict['kept_sample_percentage'].append(np.sum(prios_mask) / len(prios_mask))
             prios = prios[prios_mask]

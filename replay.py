@@ -11,41 +11,59 @@ import threading
 import pickle
 import sys
 import numpy as np
+import traceback
 
 push_size = 0
 sample_size = 0
 
 def worker(args, task_type, buf, lock, buffer, start_sending_batch_condition):
-    comm = global_dict['comm_local']
-    global push_size, sample_size
-    if task_type == 0: # batch recv
-        batch, prios = pickle.loads(buf)
-        with lock:
-            for i, sample in enumerate(zip(*batch, prios)):
-                buffer.add(*sample)
-        push_size += i+1
-        if len(buffer) - (i+1) < args['threshold_size'] and len(buffer) >= args['threshold_size']:
-            with start_sending_batch_condition:
-                start_sending_batch_condition.notify_all()
-    elif task_type == 1: # batch send
-        if len(buffer) < args['threshold_size']:
-            with start_sending_batch_condition:
-                start_sending_batch_condition.wait()
-        assert len(buffer) >= args['threshold_size']
-        beta = args['beta']
-        beta_step = (1 - beta) / 1e7 * args['batch_size']
-        while True:
+    try:
+        comm = global_dict['comm_local']
+        global push_size, sample_size
+        if task_type == 0: # batch recv
+            batch, prios = pickle.loads(buf)
             with lock:
-                beta = min(1, beta + beta_step)
-                batch = buffer.sample(args['batch_size'], beta)
-                prios_sum = buffer._it_sum.sum()
-            data = pickle.dumps((batch, prios_sum))
-            comm.Send(data, dest=global_dict['rank_learner'])
-            sample_size += args['batch_size']
-    elif task_type == 2: # prios recv
-        idxes, prios = pickle.loads(buf)
-        with lock:
-            buffer.update_priorities(idxes, prios)
+                # t = time.time()
+                for i, sample in enumerate(zip(*batch, prios)):
+                    buffer.add(*sample)
+                # print('recv batch', time.time() - t)
+            push_size += i+1
+            if len(buffer) - (i+1) < args['threshold_size'] and len(buffer) >= args['threshold_size']:
+                with start_sending_batch_condition:
+                    start_sending_batch_condition.notify_all()
+        elif task_type == 1: # batch send
+            if len(buffer) < args['threshold_size']:
+                with start_sending_batch_condition:
+                    start_sending_batch_condition.wait()
+            assert len(buffer) >= args['threshold_size']
+            beta = args['beta']
+            beta_step = (1 - beta) / 1e7 * args['batch_size']
+
+            send_batch_request = None
+            while True:
+                # t1 = time.time()
+                with lock:
+                    # t2 = time.time()
+                    beta = min(1, beta + beta_step)
+                    batch = buffer.sample(args['batch_size'], beta)
+                    prios_sum = buffer._it_sum.sum()
+                # t3 = time.time()
+                data = pickle.dumps((batch, prios_sum))
+                # t4 = time.time()
+                if send_batch_request is not None:
+                    send_batch_request.wait()
+                # t5 = time.time()
+                # print(t2-t1, t3-t2, t4-t3, t5-t4)
+                # sys.stdout.flush()
+                send_batch_request = comm.Isend(data, dest=global_dict['rank_learner'])
+                sample_size += args['batch_size']
+        elif task_type == 2: # prios recv
+            idxes, prios = pickle.loads(buf)
+            with lock:
+                buffer.update_priorities(idxes, prios)
+    except:
+        traceback.print_exc(file=sys.stdout)
+        sys.stdout.flush()
 
 
 def replay(args):
@@ -57,12 +75,13 @@ def replay(args):
 
     buffer = CustomPrioritizedReplayBuffer(args['replay_buffer_size'], args['alpha'])
     bufs = [
-        bytearray(50*1024*1024),
+        [bytearray(50*1024*1024) for _ in range(3)],
         bytearray(1),
         bytearray(10*1024),
     ]
+    _n = 0
     requests = [
-        comm.Irecv(buf=bufs[0], source=MPI.ANY_SOURCE, tag=utils.TAG_RECV_BATCH),
+        comm.Irecv(buf=bufs[0][_n], source=MPI.ANY_SOURCE, tag=utils.TAG_RECV_BATCH),
         comm.Irecv(buf=bufs[1], source=global_dict['rank_learner'], tag=utils.TAG_SEND_BATCH),
         comm.Irecv(buf=bufs[2], source=global_dict['rank_learner'], tag=utils.TAG_RECV_PRIOS),
         ]
@@ -74,9 +93,10 @@ def replay(args):
 
     while True:
         index = Request.Waitany(requests)
-        thread_pool_executor.submit(worker, args, index, bufs[index], lock, buffer, start_sending_batch_condition)
+        thread_pool_executor.submit(worker, args, index, bufs[index] if index!=0 else bufs[0][_n], lock, buffer, start_sending_batch_condition)
         if index == 0: # batch recv
-            requests[0]=comm.Irecv(buf=bufs[0], source=MPI.ANY_SOURCE, tag=utils.TAG_RECV_BATCH)
+            _n = (_n + 1) % 3
+            requests[0]=comm.Irecv(buf=bufs[0][_n], source=MPI.ANY_SOURCE, tag=utils.TAG_RECV_BATCH)
         elif index == 1: # batch send
             requests[1]=comm.Irecv(buf=bufs[1], source=global_dict['rank_learner'], tag=utils.TAG_SEND_BATCH)
         elif index == 2: # prios recv
